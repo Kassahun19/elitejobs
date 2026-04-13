@@ -1,0 +1,55 @@
+1158:  console.log("🚀 [SERVER] Initializing Express app...");
+1161:  app.use(express.json({ limit: '50mb' })); // Allow larger payloads for receipt images
+1164:  app.use((req, res, next) => {
+1170:  app.get("/api/health", async (req, res) => {
+1197:  app.get("/api/ping", (req, res) => {
+1243:  app.post("/api/telegram-webhook", (req, res) => {
+1254:  app.get("/api/bot-status", (req, res) => {
+1269:  app.post("/api/bot-setup-webhook", authenticateToken, isAdmin, async (req, res) => {
+1291:  app.post("/api/admin/bot/reinitialize", authenticateToken, isAdmin, async (req, res) => {
+1319:  app.post("/api/admin/bot/send-test", authenticateToken, isAdmin, async (req, res) => {
+1334:  app.get("/api/telegram-file/:fileId", async (req, res) => {
+1351:  app.post("/api/auth/register", async (req, res) => {
+1395:  app.post("/api/auth/login", async (req, res) => {
+1431:  app.post("/api/auth/verify-email", async (req, res) => {
+1448:  app.post("/api/auth/resend-verification", authenticateToken, async (req: any, res) => {
+1461:  app.post("/api/auth/forgot-password", async (req, res) => {
+1481:  app.post("/api/auth/reset-password", async (req, res) => {
+1503:  app.post("/api/auth/change-password", authenticateToken, async (req: any, res) => {
+1519:  app.get("/api/auth/me", authenticateToken, async (req: any, res) => {
+1526:  app.put("/api/auth/profile", authenticateToken, async (req: any, res) => {
+1550:  app.get("/api/jobs", async (req, res) => {
+1563:  app.get("/api/jobs/:id", async (req, res) => {
+1611:  app.post("/api/jobs/:id/save", authenticateToken, async (req: any, res) => {
+1638:  app.get("/api/my-saved-jobs", authenticateToken, async (req: any, res) => {
+1665:  app.get("/api/admin/system-settings", authenticateToken, async (req: any, res) => {
+1671:  app.post("/api/admin/system-settings", authenticateToken, async (req: any, res) => {
+1680:  app.get("/api/notifications", authenticateToken, async (req: any, res) => {
+1686:  app.post("/api/notifications/:id/read", authenticateToken, async (req: any, res) => {
+1695:  app.get("/api/employer/applicants", authenticateToken, async (req: any, res) => {
+1729:  app.post("/api/applications/:id/status", authenticateToken, async (req: any, res) => {
+1760:  app.get("/api/admin/users", authenticateToken, async (req: any, res) => {
+1770:  app.post("/api/admin/users", authenticateToken, isAdmin, async (req, res) => {
+1804:  app.delete("/api/admin/users/:uid", authenticateToken, isAdmin, async (req: any, res) => {
+1821:  app.patch("/api/admin/users/:uid/status", authenticateToken, isAdmin, async (req: any, res) => {
+1833:  app.put("/api/admin/users/:uid", authenticateToken, isAdmin, async (req: any, res) => {
+1853:  app.get("/api/admin/analytics", authenticateToken, async (req: any, res) => {
+1878:  app.post("/api/jobs", authenticateToken, async (req: any, res) => {
+1925:  app.put("/api/jobs/:id", authenticateToken, async (req: any, res) => {
+1947:  app.get("/api/my-jobs", authenticateToken, async (req: any, res) => {
+1954:  app.post("/api/applications", authenticateToken, async (req: any, res) => {
+1988:  app.get("/api/my-applications", authenticateToken, async (req: any, res) => {
+2007:  app.post("/api/receipts", authenticateToken, async (req: any, res) => {
+2117:  app.get("/api/my-receipts", authenticateToken, async (req: any, res) => {
+2123:  app.get("/api/admin/receipts", authenticateToken, isAdmin, async (req, res) => {
+2128:  app.get("/api/admin/notifications", authenticateToken, isAdmin, async (req, res) => {
+2133:  app.delete("/api/admin/notifications/:id", authenticateToken, isAdmin, async (req, res) => {
+2138:  app.post("/api/admin/notifications/clear-all", authenticateToken, isAdmin, async (req, res) => {
+2146:  app.post("/api/admin/receipts/:id/approve", authenticateToken, isAdmin, async (req, res) => {
+2202:  app.post("/api/admin/receipts/:id/reject", authenticateToken, isAdmin, async (req, res) => {
+2225:  app.use("/api/*", (req, res) => {
+2235:  app.use((err: any, req: any, res: any, next: any) => {
+2251:    app.use(vite.middlewares);
+2254:    app.use(express.static(distPath));
+2255:    app.get('*', (req, res) => {
+2260:  app.listen(PORT, "0.0.0.0", () => {
