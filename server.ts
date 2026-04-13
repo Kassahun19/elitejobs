@@ -2397,7 +2397,7 @@ async function startServer() {
     };
 
     for (const admin of authenticatedAdmins) {
-      bot?.sendMessage(admin.chatId, adminMsg, adminOpts).catch(() => {});
+      bot?.sendMessage((admin as any).chatId, adminMsg, adminOpts).catch(() => {});
     }
 
     // Create notifications for all job seekers (only after approval in a real app, but for now we keep it here or move it to approval)
