@@ -41,6 +41,7 @@ if (DB_DIALECT === 'mysql') {
 // Models
 export const User = sequelize.define('User', {
   uid: { type: DataTypes.STRING, primaryKey: true },
+  username: { type: DataTypes.STRING, unique: true },
   email: { type: DataTypes.STRING, unique: true, allowNull: false },
   password: { type: DataTypes.STRING, allowNull: false },
   name: { type: DataTypes.STRING },
@@ -170,6 +171,28 @@ export const initDB = async () => {
   try {
     await sequelize.authenticate();
     console.log('✅ [DB] Database connection established successfully.');
+
+    // SQLite doesn't support adding UNIQUE columns via ALTER TABLE
+    if (DB_DIALECT === 'sqlite') {
+      const queryInterface = sequelize.getQueryInterface();
+      const tables = await queryInterface.showAllTables();
+      if (tables.includes('Users')) {
+        const tableInfo = await queryInterface.describeTable('Users');
+        if (!tableInfo.username) {
+          console.log('🔄 [DB] Manually adding username column for SQLite...');
+          await queryInterface.addColumn('Users', 'username', {
+            type: DataTypes.STRING,
+            allowNull: true,
+          });
+          // Add unique index separately
+          await queryInterface.addIndex('Users', ['username'], {
+            unique: true,
+            name: 'users_username_unique'
+          });
+        }
+      }
+    }
+
     await sequelize.sync({ alter: true });
     console.log('✅ [DB] Database models synchronized.');
   } catch (error) {

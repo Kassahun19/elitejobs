@@ -62,14 +62,14 @@ export const Login = () => {
 
         <form onSubmit={handleLogin} className="space-y-6">
           <div className="space-y-2">
-            <label className="text-xs font-bold uppercase tracking-widest text-gray-400 ml-4">Email Address</label>
+            <label className="text-xs font-bold uppercase tracking-widest text-gray-400 ml-4">Email or Username</label>
             <div className="relative">
               <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
               <input
                 type="text"
                 required
                 className="w-full pl-12 pr-4 py-4 bg-gray-50 border border-transparent rounded-2xl focus:bg-white focus:ring-2 focus:ring-black focus:border-transparent transition-all outline-none"
-                placeholder="name@company.com or 'admin'"
+                placeholder="email@example.com or username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />

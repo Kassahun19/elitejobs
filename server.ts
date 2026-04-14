@@ -1703,7 +1703,7 @@ async function startServer() {
 
   // --- AUTH ROUTES ---
   app.post("/api/auth/register", asyncHandler(async (req, res) => {
-    let { email, password, displayName, role } = req.body;
+    let { email, password, displayName, role, username } = req.body;
     
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password are required" });
@@ -1713,7 +1713,17 @@ async function startServer() {
     
     const existingUser = await User.findOne({ where: { email } });
     if (existingUser) {
-      return res.status(400).json({ error: "User already exists" });
+      return res.status(400).json({ error: "User already exists with this email" });
+    }
+
+    if (username) {
+      const existingUsername = await User.findOne({ where: { username } });
+      if (existingUsername) {
+        return res.status(400).json({ error: "Username already taken" });
+      }
+    } else {
+      // Generate a default username if not provided
+      username = email.split('@')[0].replace(/[^a-zA-Z0-9]/g, '') + '_' + nanoid(4);
     }
 
     // Special case: The owner's email is automatically an admin
@@ -1724,6 +1734,7 @@ async function startServer() {
     const uid = nanoid();
     const user = {
       uid,
+      username,
       email,
       password: hashedPassword,
       displayName,
@@ -1751,19 +1762,27 @@ async function startServer() {
     
     if (!email || !password) {
       console.warn(`⚠️ [AUTH] Missing email or password in request body`);
-      return res.status(400).json({ error: "Email and password are required" });
+      return res.status(400).json({ error: "Email or Username and password are required" });
     }
 
-    email = email.toLowerCase().trim();
+    const identifier = email.toLowerCase().trim();
     
     // Allow 'admin' as an alias for the primary admin email
     let userInstance: any = null;
-    console.log(`🔍 [AUTH] Searching for user with email: ${email}`);
-    userInstance = await User.findOne({ where: { email } });
+    console.log(`🔍 [AUTH] Searching for user with identifier: ${identifier}`);
+    
+    userInstance = await User.findOne({ 
+      where: { 
+        [Op.or]: [
+          { email: identifier },
+          { username: identifier }
+        ]
+      } 
+    });
     
     if (userInstance) {
-      console.log(`✅ [AUTH] User found by email: ${email}`, { uid: userInstance.uid, role: userInstance.role });
-    } else if (email === 'admin') {
+      console.log(`✅ [AUTH] User found by identifier: ${identifier}`, { uid: userInstance.uid, role: userInstance.role });
+    } else if (identifier === 'admin') {
       console.log(`🔍 [AUTH] 'admin' alias used, searching for primary admin email: kassahunmulatu273@gmail.com`);
       userInstance = await User.findOne({ where: { email: 'kassahunmulatu273@gmail.com' } });
       if (userInstance) {
@@ -1772,7 +1791,7 @@ async function startServer() {
         console.warn(`⚠️ [AUTH] Admin user not found via alias`);
       }
     } else {
-      console.warn(`⚠️ [AUTH] User not found: ${email}`);
+      console.warn(`⚠️ [AUTH] User not found: ${identifier}`);
     }
 
     if (!userInstance) {
