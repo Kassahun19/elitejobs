@@ -2,7 +2,7 @@ import express from "express";
 import dotenv from "dotenv";
 dotenv.config();
 console.log("🔥 [SERVER] server.ts is being executed...");
-import { createServer as createViteServer } from "vite";
+// import { createServer as createViteServer } from "vite"; // Moved to dynamic import
 import path from "path";
 import { fileURLToPath } from "url";
 import jwt from "jsonwebtoken";
@@ -12,15 +12,13 @@ import fs from "fs";
 import nodemailer from "nodemailer";
 import twilio from "twilio";
 import TelegramBot from "node-telegram-bot-api";
-import { initDB, User, Job, Receipt, Notification, BotUser, System, Application, Message, AuditLog, Transaction } from "./src/lib/db.ts";
-import { Op } from "sequelize";
+import { User, Job, Receipt, Notification, BotUser, System, Application, Message, AuditLog, Transaction, Op, initDB } from "./src/lib/firestoreModels";
 
 // Helper for Audit Logging
 const logAudit = async (userId: string | null, action: string, details: any = {}, req?: any) => {
   try {
     const ipAddress = req?.ip || req?.headers['x-forwarded-for'] || 'unknown';
     await AuditLog.create({
-      id: nanoid(),
       userId,
       action,
       details,
@@ -50,12 +48,12 @@ const bootstrapAdmin = async () => {
         password: hashedPassword,
         displayName: "System Admin",
         role: "admin",
-        subscription: { type: 'lifetime', status: 'active', expiresAt: '2099-12-31' },
+        subscription: { type: 'lifetime', status: 'approved', expiresAt: '2099-12-31' },
         viewedJobsCount: 0,
         isVerified: true,
       });
       console.log(`✅ [SERVER] Admin user bootstrapped!`);
-    } else if (!(admin as any).password) {
+    } else if (!admin.password) {
       console.log(`🔥 [SERVER] Admin user exists but password missing. Updating...`);
       const hashedPassword = await bcrypt.hash("admin123", 10);
       await admin.update({ password: hashedPassword });
@@ -90,10 +88,9 @@ const cleanupJobs = async () => {
     let removedCount = 0;
     
     for (const job of jobs) {
-      const jobData = job.get({ plain: true });
-      if (!jobData.deadline) continue;
+      if (!job.deadline) continue;
       
-      const deadlineDate = new Date(jobData.deadline);
+      const deadlineDate = new Date(job.deadline);
       // Set to end of day for deadline to be fair
       deadlineDate.setHours(23, 59, 59, 999);
       const expirationDate = new Date(deadlineDate.getTime() + fiveDaysInMs);
@@ -267,9 +264,9 @@ const initBot = async () => {
         `💼 *Total Jobs:* ${jobsCount}\n` +
         `📄 *Total Receipts:* ${receiptsCount}\n` +
         `⏳ *Pending Approvals:* ${pendingReceiptsCount}\n\n` +
-        `💾 *Persistence:* ${process.env.DB_DIALECT === 'mysql' ? '✅ Permanent (MySQL)' : '⚠️ Temporary (SQLite)'}\n` +
+        `💾 *Persistence:* ✅ Permanent (Firestore)\n` +
         `🌐 *Bot Mode:* ${bot?.isPolling() ? 'Polling' : 'Webhook (24/7)'}\n\n` +
-        `_Note: If persistence is temporary, data will be lost on server restart. Use a remote MySQL database for permanent storage._`;
+        `_Note: Data is stored permanently in Google Cloud Firestore._`;
 
       bot?.sendMessage(chatId, statsMsg, { parse_mode: 'Markdown' });
     });
@@ -347,12 +344,11 @@ const initBot = async () => {
         const pageSize = 5;
         
         const activeJobs = await Job.findAll({ where: { status: 'active' } });
-        const activeJobsData = activeJobs.map(j => j.get({ plain: true }));
         
-        const totalPages = Math.ceil(activeJobsData.length / pageSize);
-        const paginatedJobs = activeJobsData.slice(page * pageSize, (page + 1) * pageSize);
+        const totalPages = Math.ceil(activeJobs.length / pageSize);
+        const paginatedJobs = activeJobs.slice(page * pageSize, (page + 1) * pageSize);
 
-        if (activeJobsData.length === 0) {
+        if (activeJobs.length === 0) {
           await bot?.sendMessage(chatId, "No active jobs found at the moment.");
         } else {
           let msg = `💼 *Latest Jobs on EliteJobs Ethiopia* (Page ${page + 1}/${totalPages})\n\n`;
@@ -385,9 +381,8 @@ const initBot = async () => {
 
       else if (category.startsWith('view_job_')) {
         const jobId = category.replace('view_job_', '');
-        const jobInstance = await Job.findByPk(jobId);
-        if (jobInstance) {
-          const job = jobInstance.get({ plain: true }) as any;
+        const job = await Job.findByPk(jobId);
+        if (job) {
           const isDeadlinePassed = job.deadline ? new Date(job.deadline) < new Date(new Date().setHours(0, 0, 0, 0)) : false;
           
           let msg = `💼 *${job.title}*\n` +
@@ -423,8 +418,7 @@ const initBot = async () => {
         const isSubscribed = botUser.subscriptionStatus === 'approved' || (botUser.role === 'admin' && botUser.isAdminAuthenticated);
         
         if (isSubscribed) {
-          const jobInstance = await Job.findByPk(jobId);
-          const j = jobInstance?.get({ plain: true }) as any;
+          const j = await Job.findByPk(jobId);
           const msg = `🚀 *How to Apply for ${j?.title}*\n\n` +
             `*Method:* ${j?.applicationProcess?.type?.toUpperCase() || 'N/A'}\n` +
             `*Value:* \`${j?.applicationProcess?.value || 'N/A'}\`\n\n` +
@@ -614,8 +608,7 @@ const initBot = async () => {
           await bot?.sendMessage(chatId, "You haven't submitted any payments yet.");
         } else {
           let msg = "📄 *Your Payment Submissions*\n\n";
-          userReceipts.forEach((r: any, i: number) => {
-            const rData = r.get({ plain: true });
+          userReceipts.forEach((rData: any, i: number) => {
             const statusEmoji = rData.status === 'approved' ? '✅' : rData.status === 'rejected' ? '❌' : '⏳';
             msg += `${i+1}. *Package:* ${rData.packageType}\n   *Status:* ${statusEmoji} ${rData.status.toUpperCase()}\n   *Date:* ${new Date(rData.createdAt).toLocaleDateString()}\n\n`;
           });
@@ -649,8 +642,7 @@ const initBot = async () => {
           await answer();
           return;
         }
-        const pendingInstances = await Receipt.findAll({ where: { status: 'pending' } });
-        const pending = pendingInstances.map(r => r.get({ plain: true })) as any[];
+        const pending = await Receipt.findAll({ where: { status: 'pending' } });
 
         if (pending.length === 0) {
           await bot?.sendMessage(chatId, "✅ No pending receipts to review.");
@@ -662,7 +654,7 @@ const initBot = async () => {
           await bot?.sendMessage(chatId, msg, { 
             parse_mode: 'Markdown',
             reply_markup: {
-              inline_keyboard: pending.slice(0, 5).map(r => ([{
+              inline_keyboard: pending.slice(0, 5).map((r: any) => ([{
                 text: `Review ${r.userName}`, callback_data: `review_${r.id}`
               }]))
             }
@@ -676,9 +668,8 @@ const initBot = async () => {
           return;
         }
         const id = category.replace('review_', '');
-        const receiptInstance = await Receipt.findByPk(id);
-        if (receiptInstance) {
-          const r = receiptInstance.get({ plain: true }) as any;
+        const r = await Receipt.findByPk(id);
+        if (r) {
           const msg = `🧐 *Reviewing Receipt*\n\n👤 *User:* ${r.userName}\n📧 *Email:* ${r.userEmail}\n📦 *Package:* ${r.packageType}\n📝 *Proof:* ${r.transactionId || 'Photo'}`;
           const opts = {
             parse_mode: 'Markdown' as const,
@@ -715,8 +706,7 @@ const initBot = async () => {
           await answer();
           return;
         }
-        const notifications = await Notification.findAll({ order: [['createdAt', 'DESC']], limit: 5 });
-        const recent = notifications.map(n => n.get({ plain: true }));
+        const recent = await Notification.findAll({ order: [['createdAt', 'DESC']], limit: 5 });
 
         if (recent.length === 0) {
           await bot?.sendMessage(chatId, "No recent notifications.");
@@ -737,25 +727,23 @@ const initBot = async () => {
           return;
         }
         const receiptId = category.replace('approve_', '').replace('admin_approve_', '');
-        const receiptInstance = await Receipt.findByPk(receiptId);
+        const receipt = await Receipt.findByPk(receiptId);
         
-        if (receiptInstance) {
-          const receipt = receiptInstance.get({ plain: true }) as any;
+        if (receipt) {
           if (receipt.status !== 'pending') {
             await answer({ text: "Action already performed." });
             await bot?.sendMessage(chatId, `⚠️ *Duplicate Action*\n\nThis receipt has already been *${receipt.status}*.`, { parse_mode: 'Markdown' });
             return;
           }
           
-          await receiptInstance.update({ status: 'approved' });
+          await receipt.update({ status: 'approved' });
           
           // Update user subscription
-          const userInstance = await User.findByPk(receipt.seekerUid);
-          let user = userInstance ? userInstance.get({ plain: true }) as any : null;
+          let user = await User.findByPk(receipt.seekerUid);
           
           // If user doesn't exist (Telegram-only user), create a shadow user
           if (!user && receipt.seekerUid && receipt.seekerUid.startsWith('tg_')) {
-            user = {
+            user = await User.create({
               uid: receipt.seekerUid,
               email: `tg_${receipt.telegramChatId}@telegram.user`,
               password: 'TELEGRAM_USER_NO_PASSWORD',
@@ -765,8 +753,7 @@ const initBot = async () => {
               viewedJobsCount: 0,
               isVerified: true,
               createdAt: new Date().toISOString(),
-            };
-            await User.create(user);
+            });
           }
 
           if (user) {
@@ -777,16 +764,13 @@ const initBot = async () => {
             
             const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
             
-            const uInst = await User.findByPk(receipt.seekerUid);
-            if (uInst) {
-              await uInst.update({
-                subscription: {
-                  status: 'approved',
-                  type: receipt.packageType,
-                  expiresAt: expiresAt
-                }
-              });
-            }
+            await user.update({
+              subscription: {
+                status: 'approved',
+                type: receipt.packageType,
+                expiresAt: expiresAt
+              }
+            });
           }
           
           // Also update botUser record
@@ -828,25 +812,23 @@ const initBot = async () => {
           return;
         }
         const receiptId = category.replace('reject_', '').replace('admin_reject_', '');
-        const receiptInstance = await Receipt.findByPk(receiptId);
+        const receipt = await Receipt.findByPk(receiptId);
         
-        if (receiptInstance) {
-          const receipt = receiptInstance.get({ plain: true }) as any;
+        if (receipt) {
           if (receipt.status !== 'pending') {
             await answer({ text: "Action already performed." });
             await bot?.sendMessage(chatId, `⚠️ *Duplicate Action*\n\nThis receipt has already been *${receipt.status}*.`, { parse_mode: 'Markdown' });
             return;
           }
           
-          await receiptInstance.update({ status: 'rejected' });
+          await receipt.update({ status: 'rejected' });
           
           // Update user subscription
-          const userInstance = await User.findByPk(receipt.seekerUid);
-          if (userInstance) {
-            const userData = userInstance.get({ plain: true }) as any;
-            await userInstance.update({
+          const user = await User.findByPk(receipt.seekerUid);
+          if (user) {
+            await user.update({
               subscription: {
-                ...userData.subscription,
+                ...user.subscription,
                 status: 'rejected'
               }
             });
@@ -891,12 +873,11 @@ const initBot = async () => {
           return;
         }
         const jobId = category.replace('approve_job_', '');
-        const jobInstance = await Job.findByPk(jobId);
-        if (jobInstance) {
-          await jobInstance.update({ isApproved: true });
+        const job = await Job.findByPk(jobId);
+        if (job) {
+          await job.update({ isApproved: true });
           await answer({ text: "Job approved successfully!", show_alert: true });
           
-          const job = jobInstance.get({ plain: true }) as any;
           const successMsg = `✅ *Job Approved*\n\n💼 *Role:* ${job.title}\n🏢 *Company:* ${job.company}\n\n_This job is now live on the platform._`;
           
           await bot?.editMessageText(successMsg, {
@@ -915,12 +896,11 @@ const initBot = async () => {
           return;
         }
         const jobId = category.replace('reject_job_', '');
-        const jobInstance = await Job.findByPk(jobId);
-        if (jobInstance) {
-          await jobInstance.update({ status: 'rejected', isApproved: false });
+        const job = await Job.findByPk(jobId);
+        if (job) {
+          await job.update({ status: 'rejected', isApproved: false });
           await answer({ text: "Job rejected.", show_alert: true });
           
-          const job = jobInstance.get({ plain: true }) as any;
           const rejectMsg = `❌ *Job Rejected*\n\n💼 *Role:* ${job.title}\n🏢 *Company:* ${job.company}\n\n_This job will not be shown to users._`;
           
           await bot?.editMessageText(rejectMsg, {
@@ -1242,19 +1222,17 @@ const getBotUser = async (chatId: number, username?: string) => {
   botLog(`🔍 getBotUser called for ${chatId}`);
   try {
     botLog(`🔍 Finding BotUser in DB for ${chatId}...`);
-    const botUserInstance = await BotUser.findByPk(chatId);
-    let botUser = botUserInstance ? botUserInstance.get({ plain: true }) : null;
+    const botUser = await BotUser.findByPk(chatId);
     
     // Try to find matching user in users to sync subscription
     const seekerUid = `tg_${chatId}`;
     botLog(`🔍 Finding shadow User in DB for ${seekerUid}...`);
-    const userInstance = await User.findByPk(seekerUid);
-    let user = userInstance ? userInstance.get({ plain: true }) : null;
+    let user = await User.findByPk(seekerUid);
 
     if (!user) {
       botLog(`👤 Creating shadow user for ${chatId}...`);
       // Create a shadow user in the main users collection to track subscription
-      user = {
+      user = await User.create({
         uid: seekerUid,
         email: `tg_${chatId}@telegram.user`,
         password: await bcrypt.hash(nanoid(), 10), // Random password for shadow user
@@ -1262,13 +1240,8 @@ const getBotUser = async (chatId: number, username?: string) => {
         role: 'seeker',
         subscription: { type: 'none', status: 'none', expiresAt: '' },
         isVerified: true,
-      };
-      try {
-        await User.create(user);
-        botLog(`✅ Created shadow user for chatId ${chatId}`);
-      } catch (setErr: any) {
-        botLog(`⚠️ Error creating shadow user for ${chatId}: ${setErr.message}`);
-      }
+      });
+      botLog(`✅ Created shadow user for chatId ${chatId}`);
     }
     
     // Always check expiration before syncing
@@ -1284,7 +1257,7 @@ const getBotUser = async (chatId: number, username?: string) => {
 
     if (!botUser) {
       botLog(`👤 Creating BotUser record for ${chatId}...`);
-      botUser = { 
+      const newBotUser = { 
         chatId, 
         username, 
         state: 'IDLE', 
@@ -1294,17 +1267,17 @@ const getBotUser = async (chatId: number, username?: string) => {
         subscriptionStatus: subStatus,
       };
       try {
-        await BotUser.create(botUser);
+        await BotUser.create(newBotUser);
         botLog(`✅ Created botUser for chatId ${chatId}`);
+        return newBotUser;
       } catch (setErr: any) {
         botLog(`⚠️ Error creating botUser for ${chatId}: ${setErr.message}`);
       }
     } else if (botUser.subscriptionStatus !== subStatus) {
       // Sync if different
       botLog(`🔄 Syncing subscription status for ${chatId}...`);
-      botUser.subscriptionStatus = subStatus;
       try {
-        await (botUserInstance as any).update({ subscriptionStatus: subStatus });
+        await botUser.update({ subscriptionStatus: subStatus });
         botLog(`✅ Synced subscription status for chatId ${chatId}: ${subStatus}`);
       } catch (updErr: any) {
         botLog(`⚠️ Error updating botUser for ${chatId}: ${updErr.message}`);
@@ -1332,6 +1305,10 @@ const updateBotUser = async (chatId: number, updates: any) => {
   }
 };
 
+const app = express();
+app.set('trust proxy', 1);
+app.use(express.json({ limit: '50mb' }));
+
 async function startServer() {
   console.log("🚀 [SERVER] Initializing Express app...");
   
@@ -1353,11 +1330,6 @@ async function startServer() {
   console.log("🔥 [SERVER] Calling cleanupJobs()...");
   cleanupJobs().catch(err => console.error("❌ [SERVER] Initial cleanup failed:", err));
   console.log("✅ [SERVER] cleanupJobs() triggered.");
-
-  const app = express();
-  app.set('trust proxy', 1);
-
-  app.use(express.json({ limit: '50mb' })); // Allow larger payloads for receipt images
 
   // --- TELEGRAM WEBHOOK (MOVED TO TOP TO PREVENT REDIRECTS) ---
   app.all("/api/telegram-webhook", (req, res) => {
@@ -1398,7 +1370,7 @@ async function startServer() {
       botStatus: botStatus,
       lastBotError: lastBotError,
       database: dbStatus,
-      dialect: (System.sequelize as any).options.dialect
+      dialect: "Firestore"
     });
   }));
 
@@ -1423,13 +1395,12 @@ async function startServer() {
       if (!admin) {
         return res.json({ exists: false, message: `Admin user ${adminEmail} not found` });
       }
-      const userData = admin.get({ plain: true });
       res.json({ 
         exists: true, 
-        email: userData.email, 
-        role: userData.role, 
-        hasPassword: !!userData.password,
-        uid: userData.uid
+        email: admin.email, 
+        role: admin.role, 
+        hasPassword: !!admin.password,
+        uid: admin.uid
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1451,7 +1422,7 @@ async function startServer() {
   app.get("/api/diag/users", async (req, res) => {
     try {
       const users = await User.findAll();
-      res.json(users.map(u => u.get({ plain: true })));
+      res.json(users);
     } catch (err: any) {
       res.status(500).json({ error: err.message, stack: err.stack });
     }
@@ -1477,8 +1448,8 @@ async function startServer() {
       res.json({ 
         success: true, 
         message: "Database connection successful!", 
-        data: data?.get({ plain: true }).data,
-        dialect: (System.sequelize as any).options.dialect
+        data: data?.data,
+        dialect: "Firestore"
       });
     } catch (err: any) {
       console.error("❌ [DIAG] Health check failed:", err);
@@ -1493,16 +1464,15 @@ async function startServer() {
   app.get("/api/diag/bootstrap-admin", async (req, res) => {
     try {
       const adminEmail = 'kassahunmulatu273@gmail.com';
-      const adminUserInstance = await User.findOne({ where: { email: adminEmail } });
+      const user = await User.findOne({ where: { email: adminEmail } });
       
-      if (adminUserInstance) {
-        const user = adminUserInstance.get({ plain: true }) as any;
+      if (user) {
         if (user.password) {
           return res.json({ success: true, message: "Admin user already exists and has a password.", uid: user.uid });
         } else {
           // Update password if missing
           const hashedPassword = await bcrypt.hash("admin123", 10);
-          await adminUserInstance.update({ password: hashedPassword });
+          await user.update({ password: hashedPassword });
           return res.json({ success: true, message: "Admin user existed but password was missing. Updated to 'admin123'.", uid: user.uid });
         }
       }
@@ -1516,7 +1486,7 @@ async function startServer() {
         password: hashedPassword,
         displayName: "System Admin",
         role: "admin",
-        subscription: { type: 'lifetime', status: 'active', expiresAt: '2099-12-31' },
+        subscription: { type: 'lifetime', status: 'approved', expiresAt: '2099-12-31' },
         viewedJobsCount: 0,
         isVerified: true,
       };
@@ -1533,13 +1503,12 @@ async function startServer() {
     try {
       const users = await User.findAll();
       const usersData = users.map(u => {
-        const data = u.get({ plain: true }) as any;
         return {
-          uid: data.uid,
-          email: data.email,
-          role: data.role,
-          hasPassword: !!data.password,
-          isVerified: data.isVerified
+          uid: u.uid,
+          email: u.email,
+          role: u.role,
+          hasPassword: !!u.password,
+          isVerified: u.isVerified
         };
       });
       res.json({ count: usersData.length, users: usersData });
@@ -1558,12 +1527,10 @@ async function startServer() {
     try {
       const decoded: any = jwt.verify(token, JWT_SECRET);
       
-      const userInstance = await User.findByPk(decoded.uid);
-      if (!userInstance) {
+      const user = await User.findByPk(decoded.uid);
+      if (!user) {
         return res.status(401).json({ error: "User session expired or not found. Please log in again." });
       }
-
-      const user = userInstance.get({ plain: true }) as any;
 
       // Check for subscription expiration using helper
       // This helper updates the user object and database if needed
@@ -1768,10 +1735,10 @@ async function startServer() {
     const identifier = email.toLowerCase().trim();
     
     // Allow 'admin' as an alias for the primary admin email
-    let userInstance: any = null;
+    let user: any = null;
     console.log(`🔍 [AUTH] Searching for user with identifier: ${identifier}`);
     
-    userInstance = await User.findOne({ 
+    user = await User.findOne({ 
       where: { 
         [Op.or]: [
           { email: identifier },
@@ -1780,13 +1747,13 @@ async function startServer() {
       } 
     });
     
-    if (userInstance) {
-      console.log(`✅ [AUTH] User found by identifier: ${identifier}`, { uid: userInstance.uid, role: userInstance.role });
+    if (user) {
+      console.log(`✅ [AUTH] User found by identifier: ${identifier}`, { uid: user.uid, role: user.role });
     } else if (identifier === 'admin') {
       console.log(`🔍 [AUTH] 'admin' alias used, searching for primary admin email: kassahunmulatu273@gmail.com`);
-      userInstance = await User.findOne({ where: { email: 'kassahunmulatu273@gmail.com' } });
-      if (userInstance) {
-        console.log(`✅ [AUTH] Admin user found via alias`, { uid: userInstance.uid, role: userInstance.role });
+      user = await User.findOne({ where: { email: 'kassahunmulatu273@gmail.com' } });
+      if (user) {
+        console.log(`✅ [AUTH] Admin user found via alias`, { uid: user.uid, role: user.role });
       } else {
         console.warn(`⚠️ [AUTH] Admin user not found via alias`);
       }
@@ -1794,12 +1761,10 @@ async function startServer() {
       console.warn(`⚠️ [AUTH] User not found: ${identifier}`);
     }
 
-    if (!userInstance) {
+    if (!user) {
       console.warn(`⚠️ [AUTH] Login failed: User not found`);
       return res.status(400).json({ error: "Invalid credentials" });
     }
-
-    const user = userInstance.get({ plain: true });
 
     if (!user.password) {
       console.error(`❌ [AUTH] User ${email} has no password set in database!`);
@@ -1832,13 +1797,13 @@ async function startServer() {
 
   app.post("/api/auth/verify-email", async (req, res) => {
     const { token } = req.body;
-    const userInstance = await User.findOne({ where: { verificationToken: token } });
+    const user = await User.findOne({ where: { verificationToken: token } });
     
-    if (!userInstance) {
+    if (!user) {
       return res.status(400).json({ error: "Invalid or expired verification token" });
     }
 
-    await userInstance.update({
+    await user.update({
       isVerified: true,
       verificationToken: null
     });
@@ -1847,14 +1812,13 @@ async function startServer() {
   });
 
   app.post("/api/auth/resend-verification", authenticateToken, async (req: any, res) => {
-    const userInstance = await User.findByPk(req.user.uid);
-    if (!userInstance) return res.status(404).json({ error: "User not found" });
+    const user = await User.findByPk(req.user.uid);
+    if (!user) return res.status(404).json({ error: "User not found" });
     
-    const user = userInstance.get({ plain: true }) as any;
     if (user.isVerified) return res.status(400).json({ error: "Email already verified" });
 
     const verificationToken = nanoid();
-    await userInstance.update({ verificationToken });
+    await user.update({ verificationToken });
 
     const appUrl = process.env.APP_URL || `http://localhost:3000`;
     console.log(`[SIMULATED EMAIL] Verification link for ${user.email}: ${appUrl}/verify-email?token=${verificationToken}`);
@@ -1863,14 +1827,14 @@ async function startServer() {
 
   app.post("/api/auth/forgot-password", asyncHandler(async (req, res) => {
     const { email } = req.body;
-    const userInstance = await User.findOne({ where: { email: email?.toLowerCase().trim() } });
+    const user = await User.findOne({ where: { email: email?.toLowerCase().trim() } });
     
-    if (!userInstance) {
+    if (!user) {
       return res.status(404).json({ error: "User with this email not found" });
     }
 
     const resetToken = nanoid();
-    await userInstance.update({
+    await user.update({
       resetPasswordToken: resetToken,
       resetPasswordExpires: Date.now() + 3600000 // 1 hour
     });
@@ -1882,19 +1846,19 @@ async function startServer() {
 
   app.post("/api/auth/reset-password", asyncHandler(async (req, res) => {
     const { token, newPassword } = req.body;
-    const userInstance = await User.findOne({ 
+    const user = await User.findOne({ 
       where: { 
         resetPasswordToken: token,
         resetPasswordExpires: { [Op.gt]: Date.now() }
       } 
     });
 
-    if (!userInstance) {
+    if (!user) {
       return res.status(400).json({ error: "Invalid or expired reset token" });
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await userInstance.update({
+    await user.update({
       password: hashedPassword,
       resetPasswordToken: null,
       resetPasswordExpires: null
@@ -1905,10 +1869,8 @@ async function startServer() {
 
   app.post("/api/auth/change-password", authenticateToken, asyncHandler(async (req: any, res) => {
     const { oldPassword, newPassword } = req.body;
-    const userInstance = await User.findByPk(req.user.uid);
-    if (!userInstance) return res.status(404).json({ error: "User not found" });
-    
-    const user = userInstance.get({ plain: true }) as any;
+    const user = await User.findByPk(req.user.uid);
+    if (!user) return res.status(404).json({ error: "User not found" });
     
     const isMatch = await bcrypt.compare(oldPassword, user.password);
     if (!isMatch) {
@@ -1916,24 +1878,23 @@ async function startServer() {
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await userInstance.update({ password: hashedPassword });
+    await user.update({ password: hashedPassword });
 
     res.json({ success: true, message: "Password changed successfully" });
   }));
 
   app.get("/api/auth/me", authenticateToken, asyncHandler(async (req: any, res) => {
-    const userInstance = await User.findByPk(req.user.uid);
-    if (!userInstance) return res.status(404).json({ error: "User not found" });
+    const user = await User.findByPk(req.user.uid);
+    if (!user) return res.status(404).json({ error: "User not found" });
     
-    const user = userInstance.get({ plain: true }) as any;
     const { password: _, ...userWithoutPassword } = user;
     res.json(userWithoutPassword);
   }));
 
   app.put("/api/auth/profile", authenticateToken, asyncHandler(async (req: any, res) => {
     const { displayName, bio, skills, resumeUrl, companyName, companyLogo, phoneNumber } = req.body;
-    const userInstance = await User.findByPk(req.user.uid);
-    if (!userInstance) return res.status(404).json({ error: "User not found" });
+    const user = await User.findByPk(req.user.uid);
+    if (!user) return res.status(404).json({ error: "User not found" });
     
     const updateData: any = {
       updatedAt: new Date()
@@ -1947,10 +1908,9 @@ async function startServer() {
     if (companyLogo !== undefined) updateData.companyLogo = companyLogo;
     if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber;
 
-    await userInstance.update(updateData);
+    await user.update(updateData);
     
-    const updatedUser = userInstance.get({ plain: true }) as any;
-    const { password: _, ...userWithoutPassword } = updatedUser;
+    const { password: _, ...userWithoutPassword } = user;
     res.json(userWithoutPassword);
   }));
 
@@ -1963,8 +1923,8 @@ async function startServer() {
     if (token) {
       try {
         const decoded: any = jwt.verify(token, JWT_SECRET);
-        const userInstance = await User.findByPk(decoded.uid);
-        if (userInstance && (userInstance.get({ plain: true }) as any).role === 'admin') {
+        const user = await User.findByPk(decoded.uid);
+        if (user && user.role === 'admin') {
           isAdminUser = true;
         }
       } catch (e) {}
@@ -1978,8 +1938,8 @@ async function startServer() {
     const activeJobs = await Job.findAll({ where });
     
     // Hide applicationProcess in the list for everyone to be safe
-    const sanitizedJobs = activeJobs.map((jobInstance: any) => {
-      const { applicationProcess, ...rest } = jobInstance.get({ plain: true });
+    const sanitizedJobs = activeJobs.map((job: any) => {
+      const { applicationProcess, ...rest } = job;
       return rest;
     });
 
@@ -2153,7 +2113,7 @@ async function startServer() {
       type: 'info'
     });
 
-    res.json(message.get({ plain: true }));
+    res.json(message);
   }));
 
   // --- ADMIN DATA EXPORT (PERMANENT STORAGE BACKUP) ---
@@ -2187,12 +2147,12 @@ async function startServer() {
 
   app.get("/api/admin/audit-logs", authenticateToken, isAdmin, asyncHandler(async (req: any, res) => {
     const logs = await AuditLog.findAll({ order: [['createdAt', 'DESC']], limit: 100 });
-    res.json(logs.map(l => l.get({ plain: true })));
+    res.json(logs);
   }));
 
   app.get("/api/admin/transactions", authenticateToken, isAdmin, asyncHandler(async (req: any, res) => {
     const transactions = await Transaction.findAll({ order: [['createdAt', 'DESC']] });
-    res.json(transactions.map(t => t.get({ plain: true })));
+    res.json(transactions);
   }));
 
   // --- APPLICANT ROUTES ---
@@ -2202,7 +2162,7 @@ async function startServer() {
     }
 
     const employerJobs = await Job.findAll({ where: { employerUid: req.user.uid } });
-    const jobIds = employerJobs.map(j => j.get({ plain: true }).id);
+    const jobIds = employerJobs.map(j => j.id);
     
     if (jobIds.length === 0) return res.json([]);
 
@@ -2212,14 +2172,10 @@ async function startServer() {
       }
     });
     
-    const applicantsData = applicants.map(a => a.get({ plain: true }));
-
     // Enrich with seeker info
-    const enrichedApplicants = await Promise.all(applicantsData.map(async (a: any) => {
-      const seekerInstance = await User.findByPk(a.seekerUid);
-      const seeker = seekerInstance ? seekerInstance.get({ plain: true }) : null;
-      const jobInstance = await Job.findByPk(a.jobId);
-      const job = jobInstance ? jobInstance.get({ plain: true }) : null;
+    const enrichedApplicants = await Promise.all(applicants.map(async (a: any) => {
+      const seeker = await User.findByPk(a.seekerUid);
+      const job = await Job.findByPk(a.jobId);
       return {
         ...a,
         seekerName: seeker?.displayName,
@@ -2236,18 +2192,16 @@ async function startServer() {
 
   app.post("/api/applications/:id/status", authenticateToken, asyncHandler(async (req: any, res) => {
     const { status } = req.body;
-    const applicationInstance = await Application.findByPk(req.params.id);
-    if (!applicationInstance) return res.status(404).json({ error: "Application not found" });
-    const application = applicationInstance.get({ plain: true }) as any;
+    const application = await Application.findByPk(req.params.id);
+    if (!application) return res.status(404).json({ error: "Application not found" });
 
     // Verify ownership
-    const jobInstance = await Job.findByPk(application.jobId);
-    const job = jobInstance ? jobInstance.get({ plain: true }) as any : null;
+    const job = await Job.findByPk(application.jobId);
     if (job?.employerUid !== req.user.uid && req.user.role !== 'admin') {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
-    await applicationInstance.update({ status });
+    await application.update({ status });
 
     // Create notification for seeker
     const notificationId = nanoid();
@@ -2267,8 +2221,8 @@ async function startServer() {
   app.get("/api/admin/users", authenticateToken, asyncHandler(async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: "Unauthorized" });
     const users = await User.findAll();
-    const usersData = users.map(userInstance => {
-      const { password, ...rest } = userInstance.get({ plain: true }) as any;
+    const usersData = users.map(user => {
+      const { password, ...rest } = user;
       return rest;
     });
     res.json(usersData);
@@ -2309,9 +2263,9 @@ async function startServer() {
 
   app.delete("/api/admin/users/:uid", authenticateToken, isAdmin, asyncHandler(async (req: any, res) => {
     const { uid } = req.params;
-    const userInstance = await User.findByPk(uid);
+    const user = await User.findByPk(uid);
     
-    if (!userInstance) {
+    if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
 
@@ -2320,19 +2274,19 @@ async function startServer() {
       return res.status(400).json({ error: "You cannot delete your own account" });
     }
 
-    await userInstance.destroy();
+    await user.destroy();
     res.json({ success: true, message: "User deleted successfully" });
   }));
   
   app.patch("/api/admin/users/:uid/status", authenticateToken, isAdmin, asyncHandler(async (req: any, res) => {
     const { uid } = req.params;
     const { isBanned } = req.body;
-    const userInstance = await User.findByPk(uid);
+    const user = await User.findByPk(uid);
     
-    if (!userInstance) return res.status(404).json({ error: "User not found" });
+    if (!user) return res.status(404).json({ error: "User not found" });
     if (uid === req.user.uid) return res.status(400).json({ error: "You cannot ban yourself" });
 
-    await userInstance.update({ isBanned });
+    await user.update({ isBanned });
     res.json({ success: true, isBanned });
   }));
 
@@ -2462,21 +2416,20 @@ async function startServer() {
   }));
 
   app.post("/api/admin/jobs/:id/reject", authenticateToken, isAdmin, asyncHandler(async (req, res) => {
-    const jobInstance = await Job.findByPk(req.params.id);
-    if (!jobInstance) return res.status(404).json({ error: "Job not found" });
+    const job = await Job.findByPk(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found" });
 
-    await jobInstance.update({ status: 'rejected', isApproved: false });
+    await job.update({ status: 'rejected', isApproved: false });
     await logAudit(req.user.uid, 'REJECT_JOB', { jobId: req.params.id }, req);
     res.json({ success: true });
   }));
 
   app.put("/api/jobs/:id", authenticateToken, asyncHandler(async (req: any, res) => {
-    const jobInstance = await Job.findByPk(req.params.id);
-    if (!jobInstance) {
+    const job = await Job.findByPk(req.params.id);
+    if (!job) {
       return res.status(404).json({ error: "Job not found" });
     }
 
-    const job = jobInstance.get({ plain: true }) as any;
     if (job.employerUid !== req.user.uid && req.user.role !== 'admin') {
       return res.status(403).json({ error: "You don't have permission to update this job" });
     }
@@ -2488,30 +2441,28 @@ async function startServer() {
       updatedAt: new Date(),
     };
 
-    await jobInstance.update(updatedJobData);
+    await job.update(updatedJobData);
     res.json(updatedJobData);
   }));
 
   app.get("/api/my-jobs", authenticateToken, asyncHandler(async (req: any, res) => {
     const myJobs = await Job.findAll({ where: { employerUid: req.user.uid } });
-    res.json(myJobs.map(j => j.get({ plain: true })));
+    res.json(myJobs);
   }));
 
   // --- APPLICATION ROUTES ---
   app.post("/api/applications", authenticateToken, asyncHandler(async (req: any, res) => {
-    const userInstance = await User.findByPk(req.user.uid);
-    if (!userInstance) return res.status(404).json({ error: "User not found" });
-    const user = userInstance.get({ plain: true }) as any;
+    const user = await User.findByPk(req.user.uid);
+    if (!user) return res.status(404).json({ error: "User not found" });
     
     if (!user || user.subscription?.status !== 'approved') {
       return res.status(403).json({ error: "Approved subscription required to apply" });
     }
 
-    const jobInstance = await Job.findByPk(req.body.jobId);
-    if (!jobInstance) {
+    const job = await Job.findByPk(req.body.jobId);
+    if (!job) {
       return res.status(404).json({ error: "Job not found" });
     }
-    const job = jobInstance.get({ plain: true }) as any;
 
     // Check if deadline passed
     if (job.deadline && new Date(job.deadline) < new Date(new Date().setHours(0, 0, 0, 0))) {
@@ -2534,13 +2485,11 @@ async function startServer() {
 
   app.get("/api/my-applications", authenticateToken, asyncHandler(async (req: any, res) => {
     const myApps = await Application.findAll({ where: { seekerUid: req.user.uid } });
-    const myAppsData = myApps.map(a => a.get({ plain: true }));
     
     // Enrich with job info if missing (for older apps)
-    const enriched = await Promise.all(myAppsData.map(async (a: any) => {
+    const enriched = await Promise.all(myApps.map(async (a: any) => {
       if (a.jobTitle) return a;
-      const jobInstance = await Job.findByPk(a.jobId);
-      const job = jobInstance ? jobInstance.get({ plain: true }) as any : null;
+      const job = await Job.findByPk(a.jobId);
       return {
         ...a,
         jobTitle: job?.title || 'Unknown Job',
@@ -2554,9 +2503,8 @@ async function startServer() {
   // --- RECEIPT & SUBSCRIPTION ROUTES ---
   app.post("/api/receipts", authenticateToken, asyncHandler(async (req: any, res) => {
     const { packageType, receiptUrl } = req.body;
-    const userInstance = await User.findByPk(req.user.uid);
-    if (!userInstance) return res.status(404).json({ error: "User not found" });
-    const user = userInstance.get({ plain: true }) as any;
+    const user = await User.findByPk(req.user.uid);
+    if (!user) return res.status(404).json({ error: "User not found" });
 
     const receiptId = nanoid();
     const receipt = {
@@ -2571,7 +2519,7 @@ async function startServer() {
     await Receipt.create(receipt);
     
     // Update user subscription status to pending
-    await userInstance.update({
+    await user.update({
       subscription: {
         ...user.subscription,
         status: 'pending',
@@ -2628,8 +2576,7 @@ async function startServer() {
       const notificationText = `🔔 *New Payment Receipt*\n\n👤 *User:* ${userName}\n📧 *Email:* ${user.email}\n📦 *Package:* ${packageType}\n\n_Please review it in the admin dashboard._`;
       
       // Notify all authenticated admins on Telegram
-      authenticatedAdmins.forEach((adminInstance: any) => {
-        const admin = adminInstance.get({ plain: true });
+      authenticatedAdmins.forEach((admin: any) => {
         bot?.sendMessage(admin.chatId, notificationText, { parse_mode: 'Markdown' })
           .catch(err => console.error(`Telegram notification failed for admin ${admin.chatId}:`, err));
       });
@@ -2759,18 +2706,16 @@ async function startServer() {
   }));
 
   app.post("/api/admin/receipts/:id/reject", authenticateToken, isAdmin, asyncHandler(async (req, res) => {
-    const receiptInstance = await Receipt.findByPk(req.params.id);
-    if (!receiptInstance) return res.status(404).json({ error: "Receipt not found" });
+    const receipt = await Receipt.findByPk(req.params.id);
+    if (!receipt) return res.status(404).json({ error: "Receipt not found" });
 
-    const receipt = receiptInstance.get({ plain: true }) as any;
-    await receiptInstance.update({ status: 'rejected' });
+    await receipt.update({ status: 'rejected' });
 
     await logAudit(req.user.uid, 'REJECT_RECEIPT', { receiptId: receipt.id, userId: receipt.seekerUid, reason: req.body.reason || 'Not specified' }, req);
 
-    const userInstance = await User.findByPk(receipt.seekerUid);
-    if (userInstance) {
-      const user = userInstance.get({ plain: true }) as any;
-      await userInstance.update({
+    const user = await User.findByPk(receipt.seekerUid);
+    if (user) {
+      await user.update({
         subscription: {
           ...user.subscription,
           status: 'rejected'
@@ -2797,8 +2742,9 @@ async function startServer() {
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
     console.log("🔥 [SERVER] Starting Vite in development mode...");
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -2806,7 +2752,7 @@ async function startServer() {
     });
     app.use(vite.middlewares);
     console.log("✅ [SERVER] Vite middleware attached.");
-  } else {
+  } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
@@ -2832,23 +2778,26 @@ async function startServer() {
     });
   });
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 [SERVER] Running on http://0.0.0.0:${PORT}`);
-    console.log(`🌍 [SERVER] Environment: ${process.env.NODE_ENV}`);
-    console.log(`[PERSISTENCE] Using MySQL/Sequelize for data storage.`);
-    
-    // Initialize Bot
-    if (process.env.TELEGRAM_BOT_TOKEN) {
-      console.log("🤖 [SERVER] TELEGRAM_BOT_TOKEN found, initializing bot...");
-      initBot();
-    } else {
-      console.warn("⚠️ [SERVER] TELEGRAM_BOT_TOKEN NOT FOUND in environment variables.");
-      botStatus = "Missing Token";
-    }
-  });
+  if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`🚀 [SERVER] Running on http://0.0.0.0:${PORT}`);
+      console.log(`🌍 [SERVER] Environment: ${process.env.NODE_ENV}`);
+      console.log(`[PERSISTENCE] Using Firestore for data storage.`);
+      
+      // Initialize Bot
+      if (process.env.TELEGRAM_BOT_TOKEN) {
+        console.log("🤖 [SERVER] TELEGRAM_BOT_TOKEN found, initializing bot...");
+        initBot();
+      } else {
+        console.warn("⚠️ [SERVER] TELEGRAM_BOT_TOKEN NOT FOUND in environment variables.");
+        botStatus = "Missing Token";
+      }
+    });
+  }
 }
 
-console.log("🏁 [SERVER] Calling startServer()...");
-startServer().catch(err => {
+export const serverReady = startServer().catch(err => {
   console.error("❌ [SERVER] Fatal error during startup:", err);
 });
+
+export { app };

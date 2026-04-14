@@ -31,9 +31,13 @@ if (DB_DIALECT === 'mysql') {
   });
 } else {
   console.log(`🔥 [DB] Using SQLite for data storage...`);
+  const storagePath = process.env.VERCEL 
+    ? '/tmp/database.sqlite' 
+    : path.join(__dirname, 'database.sqlite');
+  
   sequelize = new Sequelize({
     dialect: 'sqlite',
-    storage: path.join(__dirname, 'database.sqlite'),
+    storage: storagePath,
     logging: false,
   });
 }
